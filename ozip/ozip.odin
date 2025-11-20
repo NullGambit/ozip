@@ -1,5 +1,8 @@
 package ozip
 
+import "core:os/os2"
+import "core:strings"
+import "core:path/slashpath"
 import "core:compress"
 import "core:bytes"
 import "core:compress/zlib"
@@ -47,9 +50,6 @@ CentralDirectoryHeader :: struct #packed
     internal_attributes: i16,
     external_attributes: i32,
     file_header_offset: i32,
-    // filename: string `ozip:"from=filename_len"`,
-    // extra_field: string `ozip:"from=extra_field_len"`,
-    // file_comment: string `ozip:"from=file_comment_len"`,
 }
 
 LocalFileHeader :: struct #packed
@@ -116,7 +116,7 @@ find_eocd :: proc(data: []byte) -> (u64, Error)
     return 0, .InvalidEocd
 }
 
-open :: proc(filename: string) -> (dir: ZipDir, out_err: Error)
+open :: proc(filename: string, allocator := context.allocator) -> (dir: ZipDir, out_err: Error)
 {
     data, err := virtual.map_file(filename, {.Read, .Write})
 
@@ -138,7 +138,7 @@ open :: proc(filename: string) -> (dir: ZipDir, out_err: Error)
     size := read_int(&reader, i32)
     offset := u64(read_int(&reader, u32))
 
-    dir.local_files = make(map[string]File)
+    dir.local_files = make(map[string]File, allocator)
 
     for i in 0..<cd_count 
     {
@@ -168,6 +168,45 @@ open :: proc(filename: string) -> (dir: ZipDir, out_err: Error)
     return
 }
 
+UnpackError :: union #shared_nil 
+{
+    compress.Error,
+    os2.Error
+}
+
+unpack :: proc(dir: ZipDir, dest: string, allocator := context.allocator) -> UnpackError
+{
+    if !os2.exists(dest)
+    {
+        os2.mkdir(dest) or_return
+    }
+
+    for filename, file in dir.local_files
+    {
+        data, was_allocation := read_entry_from_file(dir, file) or_return
+
+        defer if was_allocation 
+        {
+            delete(data)
+        }
+
+        file_path := os2.join_path({dest, filename}, allocator) or_return
+
+        index := strings.last_index(file_path, "/")
+
+        path_dir := file_path[:index]
+
+        if !os2.exists(path_dir)
+        {
+            os2.mkdir(path_dir) or_return
+        }
+
+        os2.write_entire_file(file_path, data) or_return
+    }
+
+    return nil
+}
+
 close :: proc(dir: ^ZipDir)
 {
     virtual.release(raw_data(dir.data), len(dir.data))
@@ -175,20 +214,14 @@ close :: proc(dir: ^ZipDir)
     delete(dir.local_files)
 }
 
-read_entry :: proc(dir: ZipDir, filename: string) -> ([]byte, ReadEntryError, bool)
+@(private)
+read_entry_from_file :: proc(dir: ZipDir, file: File) -> ([]byte, bool, compress.Error)
 {
-    file, exists := dir.local_files[filename]
-
-    if !exists 
-    {
-        return nil, .EntryNotFound, false 
-    }
-
     offset := file.offset + LFH_EXTRA_FIELD_LEN + i32(file.header.extra_field_len + file.header.filename_len)
 
     if file.header.compression_method == .Store 
     {
-        return dir.data[offset:offset+file.header.uncompressed_size], nil, false
+        return dir.data[offset:offset+file.header.uncompressed_size], false, nil
     }
 
     data := dir.data[offset:offset+file.header.compressed_size]
@@ -197,5 +230,17 @@ read_entry :: proc(dir: ZipDir, filename: string) -> ([]byte, ReadEntryError, bo
 
     err := zlib.inflate(data, &buff, raw=true, expected_output_size=int(file.header.uncompressed_size))
 
-    return buff.buf[:], err, true
+    return buff.buf[:], true, err 
+}
+
+read_entry :: proc(dir: ZipDir, filename: string) -> ([]byte, bool, ReadEntryError)
+{
+    file, exists := dir.local_files[filename]
+
+    if !exists 
+    {
+        return nil, false, .EntryNotFound
+    }
+
+    return read_entry_from_file(dir, file)
 }

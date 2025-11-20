@@ -15,7 +15,9 @@ main :: proc()
         return
     }
 
-    my_file, entry_err, was_allocation := ozip.read_entry(dir, "ozip_tool/main.odin")
+    ozip.unpack(dir, "./archive")
+
+    my_file, was_allocation, entry_err := ozip.read_entry(dir, "ozip_tool/main.odin")
 
     if entry_err != nil 
     {

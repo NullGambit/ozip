@@ -17,7 +17,7 @@ main :: proc()
         return
     }
 
-    my_file, entry_err, was_allocation := ozip.read_entry(dir, "path/to_my_file.txt")
+    my_file, was_allocation, entry_err := ozip.read_entry(dir, "path/to_my_file.txt")
 
     if entry_err != nil 
     {
