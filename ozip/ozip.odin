@@ -70,6 +70,7 @@ LocalFileHeader :: struct #packed
 File :: struct 
 {
     header: ^LocalFileHeader,
+    cd_header: ^CentralDirectoryHeader,
     offset: i32,
 }
 
@@ -158,6 +159,7 @@ open :: proc(filename: string, allocator := context.allocator) -> (dir: ZipDir, 
         {
             dir.local_files[filename] = File {
                 header = cast(^LocalFileHeader)raw_data(local_file_buff),
+                cd_header = cd,
                 offset = cd.file_header_offset
             }
         }
@@ -183,6 +185,7 @@ unpack :: proc(dir: ZipDir, dest: string, allocator := context.allocator) -> Unp
 
     for filename, file in dir.local_files
     {
+        // TODO: optimize it by writing to one giant file buffer
         data, was_allocation := read_entry_from_file(dir, file) or_return
 
         defer if was_allocation 
@@ -224,11 +227,11 @@ read_entry_from_file :: proc(dir: ZipDir, file: File) -> ([]byte, bool, compress
         return dir.data[offset:offset+file.header.uncompressed_size], false, nil
     }
 
-    data := dir.data[offset:offset+file.header.compressed_size]
+    data := dir.data[offset:offset+file.cd_header.compressed_size]
 
     buff: bytes.Buffer
 
-    err := zlib.inflate(data, &buff, raw=true, expected_output_size=int(file.header.uncompressed_size))
+    err := zlib.inflate(data, &buff, raw=true, expected_output_size=int(file.cd_header.uncompressed_size))
 
     return buff.buf[:], true, err 
 }
