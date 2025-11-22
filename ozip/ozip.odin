@@ -195,6 +195,8 @@ unpack :: proc(dir: ZipDir, dest: string, allocator := context.allocator) -> Unp
 
         file_path := os2.join_path({dest, filename}, allocator) or_return
 
+        defer delete(file_path)
+
         index := strings.last_index(file_path, "/")
 
         path_dir := file_path[:index]
